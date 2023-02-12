@@ -117,9 +117,8 @@ func (i *IcsStorage) Set(calendar string) {
 }
 
 type Calendar struct {
-	ics         IcsStorage
-	httpRequest *http.Request
-	httpClient  *http.Client
+	ics        IcsStorage
+	httpClient *http.Client
 }
 
 func NewCalendar() (*Calendar, error) {
