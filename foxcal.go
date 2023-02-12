@@ -26,14 +26,18 @@ import (
 	"golang.org/x/net/publicsuffix"
 )
 
-var log = logrus.New()
-var baseDomain string
-var rememberUserToken string
-var refreshInterval = time.Duration(12) * time.Hour
-var userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:109.0) Gecko/20100101 Firefox/109.0"
+var (
+	log               = logrus.New()
+	baseDomain        string
+	rememberUserToken string
+	refreshInterval   = time.Duration(12) * time.Hour
+	userAgent         = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:109.0) Gecko/20100101 Firefox/109.0"
+)
+
+const readHeaderTimeout = 5 * time.Second
 
 func init() {
-	//init logger
+	// init logger
 	log.SetFormatter(&logrus.TextFormatter{FullTimestamp: true})
 	log.SetLevel(logrus.InfoLevel)
 
@@ -49,13 +53,13 @@ func init() {
 		log.Fatal("BASE_DOMAIN env variable is not a valid URL")
 	}
 
-	//set refresh interval
+	// set refresh interval
 	refreshIntervalEnv := os.Getenv("REFRESH_INTERVAL_MINS")
 	if refreshIntervalEnv == "" {
 		log.Fatal("REFRESH_INTERVAL_MINS env variable is not set")
 	}
 
-	//parse refreshIntervalEnv to int
+	// parse refreshIntervalEnv to int
 	refreshIntervalInt, err := strconv.Atoi(refreshIntervalEnv)
 	if err != nil {
 		log.Fatal("REFRESH_INTERVAL_MINS env variable is not a valid integer")
@@ -63,7 +67,7 @@ func init() {
 
 	refreshInterval = time.Duration(refreshIntervalInt) * time.Minute
 
-	//set user agent
+	// set user agent
 	userAgentEnv := os.Getenv("USER_AGENT")
 	if userAgentEnv != "" {
 		userAgent = userAgentEnv
@@ -74,7 +78,6 @@ func init() {
 	if rememberUserToken == "" {
 		log.Fatal("REMEMBER_USER_TOKEN not found in environment variable")
 	}
-
 }
 
 const (
@@ -117,23 +120,22 @@ func (i *IcsStorage) Set(calendar string) {
 }
 
 type Calendar struct {
-	ics         IcsStorage
-	httpRequest *http.Request
-	httpClient  *http.Client
+	ics        IcsStorage
+	httpClient *http.Client
 }
 
-func NewCalendar() (*Calendar, error) {
+func NewCalendar(ctx context.Context) (*Calendar, error) {
 	calendar := Calendar{}
-	err := calendar.initHttpClient()
+	err := calendar.initHTTPClient()
 	if err != nil {
 		return nil, err
 	}
-	err = calendar.updateCalendar()
+	err = calendar.updateCalendar(ctx)
 	return &calendar, err
 }
 
-func (c *Calendar) updateCalendar() error {
-	events, err := c.getCalendarFromASite()
+func (c *Calendar) updateCalendar(ctx context.Context) error {
+	events, err := c.getCalendarFromASite(ctx)
 	if err != nil {
 		return fmt.Errorf("error reading JSON file: %w", err)
 	}
@@ -153,7 +155,7 @@ func (c *Calendar) CalendarUpdateLoop(ctx context.Context, wg *sync.WaitGroup) {
 			log.Info("Calendar update loop stopped")
 			return
 		case <-time.After(refreshInterval):
-			err := c.updateCalendar()
+			err := c.updateCalendar(ctx)
 			if err != nil {
 				log.WithError(err).Warning("Error updating calendar")
 			}
@@ -168,7 +170,7 @@ func (c *Calendar) GetCalendarHandler(w http.ResponseWriter, _ *http.Request) {
 	}
 }
 
-func (c *Calendar) initHttpClient() error {
+func (c *Calendar) initHTTPClient() error {
 	// Create a new cookie jar
 	jar, err := cookiejar.New(&cookiejar.Options{PublicSuffixList: publicsuffix.List})
 	if err != nil {
@@ -200,10 +202,10 @@ func (c *Calendar) initHttpClient() error {
 	return nil
 }
 
-func (c *Calendar) getCalendarFromASite() ([]Event, error) {
+func (c *Calendar) getCalendarFromASite(ctx context.Context) ([]Event, error) {
 	left, right := getTimeRange()
 	requestURL := fmt.Sprintf(baseURL, baseDomain, left.Format("2006-01-02"), right.Format("2006-01-02"))
-	req, err := http.NewRequest("GET", requestURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("error creating request: %w", err)
 	}
@@ -212,7 +214,6 @@ func (c *Calendar) getCalendarFromASite() ([]Event, error) {
 
 	log.Info("Requesting calendar from ", requestURL)
 	resp, err := c.httpClient.Do(req)
-
 	if err != nil {
 		return nil, fmt.Errorf("error getting calendar from a site: %w", err)
 	}
@@ -248,7 +249,7 @@ func GenerateICSFile(events []Event) (string, error) {
 		uniqueUUIDStorage[urlHash] = true
 		e := cal.AddEvent(urlHash)
 
-		//e.SetDtStampTime(event.StartsAt)
+		// e.SetDtStampTime(event.StartsAt)
 		e.SetStartAt(event.StartsAt)
 		err := e.SetDuration(time.Duration(event.Duration) * time.Minute)
 		if err != nil {
@@ -272,7 +273,8 @@ func GenerateICSFile(events []Event) (string, error) {
 }
 
 func main() {
-	calendar, err := NewCalendar()
+	ctx := context.Background()
+	calendar, err := NewCalendar(ctx)
 	if err != nil {
 		log.WithError(err).Fatal("Error creating calendar")
 		os.Exit(1)
@@ -281,25 +283,25 @@ func main() {
 	wg := &sync.WaitGroup{}
 	defer wg.Wait()
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	wg.Add(1)
 	go calendar.CalendarUpdateLoop(ctx, wg)
 
 	r := chi.NewRouter()
-	//r.Use(middleware.Logger)
+	// r.Use(middleware.Logger)
 	r.Use(loggerMiddleware.Logger("router", log))
 	r.Use(middleware.Recoverer)
 	r.Get("/calendar.ics", calendar.GetCalendarHandler)
-	srv := &http.Server{Addr: ":3000", Handler: r}
+	srv := &http.Server{Addr: ":3000", Handler: r, ReadHeaderTimeout: readHeaderTimeout}
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		err := srv.ListenAndServe()
 		if err != nil {
-			fmt.Println(err)
+			log.WithError(err).Errorf("error starting server")
 		}
 	}()
 
