@@ -28,6 +28,7 @@ import (
 
 var log = logrus.New()
 var baseDomain string
+var rememberUserToken string
 var refreshInterval = time.Duration(12) * time.Hour
 var userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:109.0) Gecko/20100101 Firefox/109.0"
 
@@ -68,6 +69,12 @@ func init() {
 		userAgent = userAgentEnv
 		log.Debugf("User agent is set to %s", userAgent)
 	}
+
+	rememberUserToken = os.Getenv("REMEMBER_USER_TOKEN")
+	if rememberUserToken == "" {
+		log.Fatal("REMEMBER_USER_TOKEN not found in environment variable")
+	}
+
 }
 
 const (
@@ -117,8 +124,11 @@ type Calendar struct {
 
 func NewCalendar() (*Calendar, error) {
 	calendar := Calendar{}
-	calendar.initHttpClient()
-	err := calendar.updateCalendar()
+	err := calendar.initHttpClient()
+	if err != nil {
+		return nil, err
+	}
+	err = calendar.updateCalendar()
 	return &calendar, err
 }
 
@@ -127,7 +137,7 @@ func (c *Calendar) updateCalendar() error {
 	if err != nil {
 		return fmt.Errorf("error reading JSON file: %w", err)
 	}
-	if calendar, err := GenerateICSFile(events); err != nil {
+	if calendar, err := GenerateICSFile(events); err == nil {
 		c.ics.Set(calendar)
 		log.Info("Calendar updated")
 		return nil
@@ -163,12 +173,6 @@ func (c *Calendar) initHttpClient() error {
 	jar, err := cookiejar.New(&cookiejar.Options{PublicSuffixList: publicsuffix.List})
 	if err != nil {
 		return fmt.Errorf("error creating cookie jar: %w", err)
-	}
-
-	// Get the value of the remember_user_token cookie from the environment variable
-	rememberUserToken := os.Getenv("REMEMBER_USER_TOKEN")
-	if rememberUserToken == "" {
-		return fmt.Errorf("REMEMBER_USER_TOKEN not found in environment variable")
 	}
 
 	// Create a new cookie with the remember_user_token value
