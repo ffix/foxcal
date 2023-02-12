@@ -1,0 +1,28 @@
+linters:
+  enable-all: true
+  disable:
+    # deprecated/non-functional
+    - maligned
+    - deadcode
+    - exhaustivestruct
+    - structcheck
+    - interfacer
+    - varcheck
+    - golint
+    - ifshort
+    - nosnakecase
+    - scopelint
+    - rowserrcheck
+    - sqlclosecheck
+    - wastedassign
+    # don't need it because of external source of json
+    - tagliatelle
+    # enable later
+    - wsl
+    - varnamelen
+    - nlreturn
+    - gochecknoglobals
+    - gochecknoinits
+    - exhaustruct
+    - gomnd
+    - goerr113
